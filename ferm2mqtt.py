@@ -60,10 +60,10 @@ LOG = lg.getLogger()
 # Create handlers
 c_handler = lg.StreamHandler()
 f_handler = lg.FileHandler('/tmp/ferm2mqtt.log')
-c_handler.setLevel(lg.INFO)
-f_handler.setLevel(lg.INFO)
-#@@@#c_handler.setLevel(lg.WARNING)
-#@@@#f_handler.setLevel(lg.WARNING)
+#@@@#c_handler.setLevel(lg.INFO)
+#@@@#f_handler.setLevel(lg.INFO)
+c_handler.setLevel(lg.WARNING)
+f_handler.setLevel(lg.WARNING)
 
 # Create formatters and add it to handlers
 c_format = lg.Formatter('%(name)s - %(levelname)s - %(message)s')
