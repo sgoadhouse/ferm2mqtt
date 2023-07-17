@@ -487,8 +487,8 @@ def publish_RAPTPILL(color):
             mqttdata = {
                 "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
                 "specific_gravity_pts_per_day_"+suffix: "{:.1f}".format(myRaptPill.gravity_velocity),
-                "temperatureC_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
-                "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
+                "temperature_celcius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
                 "battery": "{:.1f}".format(myRaptPill.battery),
                 "rssi": "{:d}".format(myRaptPill.rssi),
                 #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
@@ -500,8 +500,8 @@ def publish_RAPTPILL(color):
                 color, myRaptPill.specific_gravity, myRaptPill.temperatureC, temperatureF, myRaptPill.battery, myRaptPill.rssi, lat))
             mqttdata = {
                 "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
-                "temperatureC_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
-                "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
+                "temperature_celcius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
                 "battery": "{:.1f}".format(myRaptPill.battery),
                 "rssi": "{:d}".format(myRaptPill.rssi),
                 #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
