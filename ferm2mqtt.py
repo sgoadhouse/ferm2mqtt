@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Wrapper for reading messages from RAPT Pill wireless hydrometer and forwarding them to MQTT topics. 
+"""Wrapper for reading messages from [RAPT Pill wireless hydrometer](https://www.kegland.com.au/products/yellow-rapt-pill-hydrometer-thermometer-wifi-bluetooth/) or [Tilt wireless Hydrometer](https://tilthydrometer.com) and forwarding them to MQTT topics. 
 
-The device is a Bluetooth Low Energy (BLE) device that sends out a
-set of 6 advertisements for every interval as set in the Pill.
-
-The code is roughly based on tilt2mqtt.py
-
-Details of RAPT Pill data format can be found here:
+The device acts as a simple Bluetooth Low Energy (BLE) beacon sending its data encoded within the Manufacturing Data. Details of RAPT Pill data format can be found here:
 https://gitlab.com/rapt.io/public/-/wikis/Pill-Hydrometer-Bluetooth-Transmissions
 
-The raw values read from the RAPT Pill are (possibly) uncalibrated and should be calibrated before use. The script works a follows,
+The raw values read from the RAPT Pill or Tilt are (possibly) uncalibrated and should be calibrated before use. The script works a follows,
 
  1. Listen for local BLE devices
  2. If found the callback is triggered
   * Use Manufacturer ID "5241" (0x4152) to determine that it is from a RAPT Pill (cannot yet distinguish multiple Pills)
+  * Use Manufacturer ID "4c00" (0x004c) to determine that it is from an iBeacon and check UUID for Tilt color
   * Extract and convert measurements from the device
   * Construct a JSON payload
   * Send payload to the MQTT server
@@ -23,13 +19,17 @@ This script has been tested on Linux.
 
 # How to run
 
-First install Python dependencies
+If you are on Linux first install the bluetooth packages,
 
- pip install beacontools paho-mqtt requests pybluez
+sudo apt-get install libbluetooth-dev
+
+Then install Python dependencies
+
+pip install bleson paho-mqtt requests pybluez schedule
 
 Run the script,
 
- python raptpill2mqtt.py
+python ferm2mqtt.py
 
 Note: A MQTT server is required.
 
@@ -48,22 +48,28 @@ import paho.mqtt.publish as publish
 import requests
 from ast import literal_eval
 
+import threading
+import schedule
+
+
 #
 # Constants
 #
-#@@@#sleep_interval = 60.0*10  # How often to listen for new messages in seconds
-sleep_interval = 60.0*5  # How often to listen for new messages in seconds
+#@@@#scan_interval = 60.0  # How long to scan in seconds
+sleep_interval = 60.0*4  # Num. seconds to wait after scanning for new messages before scan again
 
-lg.basicConfig(level=lg.INFO)
+lg.basicConfig()
 LOG = lg.getLogger()
+# UNCOMMENT the below to output DEBUG level (not sure why)
+#@@@#LOG.setLevel(lg.NOTSET)
 
 # Create handlers
 c_handler = lg.StreamHandler()
 f_handler = lg.FileHandler('/tmp/ferm2mqtt.log')
-#@@@#c_handler.setLevel(lg.INFO)
-#@@@#f_handler.setLevel(lg.INFO)
-c_handler.setLevel(lg.WARNING)
-f_handler.setLevel(lg.WARNING)
+c_handler.setLevel(lg.INFO)
+f_handler.setLevel(lg.INFO)
+#@@@#c_handler.setLevel(lg.WARNING)
+#@@@#f_handler.setLevel(lg.WARNING)
 
 # Create formatters and add it to handlers
 c_format = lg.Formatter('%(name)s - %(levelname)s - %(message)s')
@@ -75,8 +81,54 @@ f_handler.setFormatter(f_format)
 LOG.addHandler(c_handler)
 LOG.addHandler(f_handler)
 
+# Create classes to hold data during scans
+class Tilt:
+    def __init__(self):
+        self.samples = 0
+        self.rssi = 0
+        self.temperatureF = 0.0
+        self.specific_gravity = 0.0
+        self.lastActivityTime = None
+
+    def __repr__(self):
+        return f'Tilt(Samples: {self.samples} Gravity: {self.specific_gravity:.4f} Temp: {self.temperatureF:.1f}F RSSI: {self.rssi} Now: {self.lastActivityTime})'
+        
+    def __add__(self, x):
+        newTilt = self
+        newTilt.samples += 1
+        newTilt.rssi += x.rssi
+        newTilt.temperatureF += x.temperatureF
+        newTilt.specific_gravity += x.specific_gravity
+        if (x.lastActivityTime is None):
+            newTilt.lastActivityTime = datetime.now()
+        else:
+            newTilt.lastActivityTime = x.lastActivityTime
+
+        return newTilt
+            
+    def average(self):
+        """Average all values and return to self. Reset samples to 1.
+           Leave lastActivityTime as the last set value.
+        """
+        self.temperatureF /= self.samples
+        self.specific_gravity /= self.samples
+        self.rssi //= self.samples
+        self.samples = 1
+
+tiltsLock = threading.Lock()
+Tilts = {
+    'Red'   : Tilt(),
+    'Green' : Tilt(),
+    'Black' : Tilt(),
+    'Purple': Tilt(),
+    'Orange': Tilt(),
+    'Blue'  : Tilt(),
+    'Yellow': Tilt(),
+    'Pink'  : Tilt(),
+}
+        
 # Unique bluetooth UUIDs for Tilt sensors
-TILTS = {
+TILT_UUIDS = {
         'a495bb10c5b14b44b5121370f02d74de': 'Red',
         'a495bb20c5b14b44b5121370f02d74de': 'Green',
         'a495bb30c5b14b44b5121370f02d74de': 'Black',
@@ -84,7 +136,7 @@ TILTS = {
         'a495bb50c5b14b44b5121370f02d74de': 'Orange',
         'a495bb60c5b14b44b5121370f02d74de': 'Blue',
         'a495bb70c5b14b44b5121370f02d74de': 'Yellow',
-        'a495bb80c5b14b44b5121370f02d74de': 'Pink',
+        'a495bb80c5b14b44b5121370f02d74de': 'Pink', 
         #@@@#'020001c0-1cf3-4090-d644-781eff3a2cfe': 'RAPT Yellow',
 }
 
@@ -97,12 +149,12 @@ tilt_calibration = {
         'Blue'   : literal_eval(os.getenv('TILT_CAL_BLUE', "None")),
         'Yellow' : literal_eval(os.getenv('TILT_CAL_YELLOW', "None")),
         'Pink'   : literal_eval(os.getenv('TILT_CAL_PINK', "None")),
-        'unknown': literal_eval(os.getenv('TILT_CAL_UNKNOWN', "None")),
+        #@@@#'unknown': literal_eval(os.getenv('TILT_CAL_UNKNOWN', "None")),
 }
 
 rapt_calibration = {
         'Yellow' : literal_eval(os.getenv('RAPT_CAL_YELLOW', "None")),
-        'unknown': literal_eval(os.getenv('RAPT_CAL_UNKNOWN', "None")),
+        #@@@#'unknown': literal_eval(os.getenv('RAPT_CAL_UNKNOWN', "None")),
 }
 #@@@#LOG.info("TILT Blue Calibration: {}".format(calibration['Blue']))
 
@@ -117,42 +169,87 @@ config = {
 #@@@#LOG.info("MQTT Broker: {}:{}  AUTH:{}".format(config['host'], config['port'], config['auth']))
 #@@@#LOG.info("AUTH['username']:{}  AUTH['password']:{}".format(config['auth']['username'],config['auth']['password']))
 
+def sg2plato(sg):
+    """ Convert Specific Gravity to Plato
+    """
+    return 135.997*pow(sg, 3) - 630.272*pow(sg, 2) + 1111.14*sg - 616.868
+
+def degreeF2C(fahrenheit):
+    """ Convert Degrees Fahrenheit to Celcius
+    """
+    return (fahrenheit - 32) * 5/9
+
 def process_TILT(address, rssi, color, major, minor, prox):
-            
+
+    myTilt = Tilt()
+    
     # Get uncalibrated values
-    temperature_fahrenheit = float(major)
-    specific_gravity = float(minor)/1000
+    myTilt.temperatureF = float(major)
+    myTilt.specific_gravity = float(minor)/1000
+    myTilt.rssi = rssi
 
     try:
+        with tiltsLock:
+            Tilts[color] += myTilt
+            LOG.info("PROCESS: Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(
+                color, myTilt.specific_gravity, degreeF2C(myTilt.temperatureF), myTilt.temperatureF, myTilt.rssi, Tilts[color].lastActivityTime))
+            LOG.info(f'PROCESS: Tilt: {color} {Tilts[color]}')    
+        
+    except KeyError:
+        LOG.error("Unknown Tilt color: {}".format(color))
+
+def publish_TILT(color):
+    
+    try:
+        with tiltsLock:
+            # Check if have anything to publish
+            if (Tilts[color].samples < 1):        
+                LOG.info("Nothing to publish for Tilt color: {}".format(color))
+                return
+        
+            # next, average all of the collected values and copy results to myTilt
+            Tilts[color].average()
+            myTilt = Tilts[color]
+        
+            # re-init data so the next set can be averaged
+            # NOTE: if data is not published, it will be lost
+            Tilts[color] = Tilt()
+        
         # See if have calibration values. If so, use them.
         if (tilt_calibration[color]):
             suffix = "cali"
-            temperature_fahrenheit += tilt_calibration[color]['temp']
-            specific_gravity += tilt_calibration[color]['sg']
+            myTilt.temperatureF += tilt_calibration[color]['temp']
+            myTilt.specific_gravity += tilt_calibration[color]['sg']
         else:
             suffix = "uncali"
         
         # convert temperature
-        temperature_celsius = (temperature_fahrenheit - 32) * 5/9
+        temperatureC = degreeF2C(myTilt.temperatureF)
 
-        # convert gravity
-        degree_plato = 135.997*pow(specific_gravity, 3) - 630.272*pow(specific_gravity, 2) + 1111.14*specific_gravity - 616.868
+        # convert gravity to Plato
+        degree_plato = sg2plato(myTilt.specific_gravity)
 
-        now = datetime.now()        
-        LOG.info("Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(color, specific_gravity, temperature_celsius, temperature_fahrenheit, rssi, now))        
+        # Check that a lastActivityTime exists - if not set to now()
+        if (myTilt.lastActivityTime is None):
+            lat = datetime.now()
+        else:
+            lat = myTilt.lastActivityTime
+            
+        LOG.info("PUBLISH: Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(color, myTilt.specific_gravity, temperatureC, myTilt.temperatureF, myTilt.rssi, lat))        
         mqttdata = {
-            "specific_gravity_"+suffix: "{:.3f}".format(specific_gravity),
+            "specific_gravity_"+suffix: "{:.3f}".format(myTilt.specific_gravity),
             "plato_"+suffix: "{:.2f}".format(degree_plato),
-            "temperature_celsius_"+suffix: "{:.2f}".format(temperature_celsius),
-            "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperature_fahrenheit),
-            "rssi": "{:d}".format(rssi),
+            "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
+            "temperatureF_"+suffix: "{:.1f}".format(myTilt.temperatureF),
+            "rssi": "{:d}".format(myTilt.rssi),
             #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
-            "lastActivityTime": "{}".format(now),
+            "lastActivityTime": "{}".format(lat),
         }
 
         # Send message via MQTT server
         publish.single("tilt/{}".format(color), payload=json.dumps(mqttdata), qos=0, retain=True,
                        hostname=config['host'], port=config['port'], auth=config['auth'])
+        
     except KeyError:
         LOG.error("Unknown Tilt color: {}".format(color))
         
@@ -161,7 +258,7 @@ def process_iBeacon(address, rssi, mfg_data):
     """Process the iBeacon Message
     """
 
-    color = "unknown"
+    #@@@#color = "unknown"
 
     # payload is an ASCII string of hex digits which may be an easier way to handle data in some cases
     payload = mfg_data.hex()
@@ -182,7 +279,7 @@ def process_iBeacon(address, rssi, mfg_data):
             uuid = payload[8:40]
 
             try:
-                color = TILTS[uuid]
+                color = TILT_UUIDS[uuid]
             except KeyError:
                 LOG.info("Unable to decode Tilt color. Probably some other iBeacon. Message was {}".format(payload))
                 return
@@ -229,7 +326,7 @@ def process_RAPTPILL(address, rssi, mfg_data):
             temperatureF = (temperatureC * 9/5) + 32
             # specific gravity, floating point, apparently in points
             specific_gravity = data[4] / 1000
-            # raw accelerometer dta * 16, signed
+            # raw accelerometer data * 16, signed
             accel_x = data[5] / 16
             accel_y = data[6] / 16
             accel_z = data[7] / 16
@@ -253,8 +350,8 @@ def process_RAPTPILL(address, rssi, mfg_data):
                     mqttdata = {
                         "specific_gravity_"+suffix: "{:.4f}".format(specific_gravity),
                         "specific_gravity_pts_per_day_"+suffix: "{:.1f}".format(gravity_velocity),
-                        "temperature_celsius_"+suffix: "{:.2f}".format(temperatureC),
-                        "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
+                        "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
+                        "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
                         "battery": "{:.1f}".format(battery),
                         "rssi": "{:d}".format(rssi),
                         #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
@@ -266,8 +363,8 @@ def process_RAPTPILL(address, rssi, mfg_data):
                     LOG.info("Pill: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F Battery: {:.1f}% RSSI: {} Now: {}".format(address.address, specific_gravity, temperatureC, temperatureF, battery, rssi, now))
                     mqttdata = {
                         "specific_gravity_"+suffix: "{:.4f}".format(specific_gravity),
-                        "temperature_celsius_"+suffix: "{:.2f}".format(temperatureC),
-                        "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
+                        "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
+                        "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
                         "battery": "{:.1f}".format(battery),
                         "rssi": "{:d}".format(rssi),
                         #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
@@ -311,7 +408,7 @@ def on_advertisement(advertisement):
             process_RAPTPILL(advertisement.address, advertisement.rssi, advertisement.mfg_data)
             
 
-def scan(scantime=25.0):        
+def scan(scantime=25.0):
     LOG.info("Create BLE Scanner")
     adapter = get_provider().get_adapter()
 
@@ -321,26 +418,80 @@ def scan(scantime=25.0):
     LOG.info("Started scanning")
     # Start scanning
     observer.start()
-   
-    # Time to wait for RAPT Pill to respond
+    
     sleep(scantime)
 
     # Stop again
+    #
+    # NOTE: not sure if bug or what but this does NOT stop
+    # scanning. Once you start, it seems you cannot stop
     observer.stop()
-    LOG.info("Stopped scanning")
+    adapter.stop_scanning()
+    LOG.info("Stopped scanning - PSYCHE!")
    
 
-# Set Log level for bleson scanner to ERROR to prevent the large number of WARNINGs from going into the log
-set_level(ERROR)
-        
-while(1):
+def publishAll():
 
-    # Scan for iBeacons of RAPT Pill for 75 seconds
-    scan(75.0)
+    # Publish all possible Tilts
+    for color in Tilts:
+        publish_TILT(color)
 
+
+def schedule_run_continuously(interval=1):
+    """Continuously run, while executing pending jobs at each
+    elapsed time interval.
+    @return cease_continuous_run: threading. Event which can
+    be set to cease continuous run. Please note that it is
+    *intended behavior that schedule_run_continuously() does not run
+    missed jobs*. For example, if you've registered a job that
+    should run every minute and you set a continuous run
+    interval of one hour then your job won't be run 60 times
+    at each interval but only once.
+    """
+    cease_continuous_run = threading.Event()
+
+    class ScheduleThread(threading.Thread):
+        @classmethod
+        def run(cls):
+            while not cease_continuous_run.is_set():
+                schedule.run_pending()
+                sleep(interval)
+
+    continuous_thread = ScheduleThread()
+    continuous_thread.start()
+    return cease_continuous_run
+
+
+if __name__ == '__main__':  
+    # Set Log level for bleson scanner to ERROR to prevent the large number of WARNINGs from going into the log
+    set_level(ERROR)
+
+    # Publish and reset data once every minute
+    schedule.every().minute.do(publishAll)
+
+    # Start the background thread for schedule
+    stop_run_continuously = schedule_run_continuously()
+    
+    # Scan for iBeacons of RAPT Pill and collect data
+    scan()
+
+    # Publish any captured data
+    #@@@#publishAll()
+    
     #@@@## Test mqtt publish with sample data
     #@@@#callback("ea:ca:eb:f0:0f:b5", -95, "", {'uuid': 'a495bb60-c5b1-4b44-b512-1370f02d74de', 'major': 73, 'minor': 989})
     #@@@#sleep(2.0)
 
-    # Wait until next scan period
-    sleep(sleep_interval)
+    # Since scan() CANNOT actually stop the scan and once it starts,
+    # on_advertisement() gets called whenever there is another
+    # advertisement, simply loop here forever using sleep() to keep from
+    # running a VERY tight while loop that will chew up CPU cycles
+
+    while(1):
+        # Wait until next interval period
+        sleep(sleep_interval)
+
+    # Stop the background thread
+    # NOTE: Should not ever run
+    stop_run_continuously.set()
+    

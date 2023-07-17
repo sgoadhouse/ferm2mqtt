@@ -48,7 +48,7 @@ sudo apt-get install libbluetooth-dev
 Then install Python dependencies
 
 ```
-pip install bleson paho-mqtt requests pybluez
+pip install bleson paho-mqtt requests pybluez schedule
 ```
 
 Run the script,
