@@ -11,9 +11,10 @@ The raw values read from the RAPT Pill or Tilt are (possibly) uncalibrated and s
   * Use Manufacturer ID "5241" (0x4152) to determine that it is from a RAPT Pill (cannot yet distinguish multiple Pills)
   * Use Manufacturer ID "4c00" (0x004c) to determine that it is from an iBeacon and check UUID for Tilt color
   * Extract and convert measurements from the device
+  * Store in a global under the device's color string for processing later
+ 3. Every minute, process collected data and:
   * Construct a JSON payload
   * Send payload to the MQTT server
- 3. Stop listening and sleep for X minutes before getting a new measurement
 
 This script has been tested on Linux.
 
@@ -36,7 +37,7 @@ Note: A MQTT server is required.
 """
 
 from time import sleep
-from bleson import get_provider, Observer
+from bleson import get_provider, Observer, BDAddress
 from bleson.logger import DEBUG, ERROR, WARNING, INFO, set_level
 from datetime import datetime
 
@@ -66,10 +67,10 @@ LOG = lg.getLogger()
 # Create handlers
 c_handler = lg.StreamHandler()
 f_handler = lg.FileHandler('/tmp/ferm2mqtt.log')
-c_handler.setLevel(lg.INFO)
-f_handler.setLevel(lg.INFO)
-#@@@#c_handler.setLevel(lg.WARNING)
-#@@@#f_handler.setLevel(lg.WARNING)
+#@@@#c_handler.setLevel(lg.INFO)
+#@@@#f_handler.setLevel(lg.INFO)
+c_handler.setLevel(lg.WARNING)
+f_handler.setLevel(lg.WARNING)
 
 # Create formatters and add it to handlers
 c_format = lg.Formatter('%(name)s - %(levelname)s - %(message)s')
@@ -85,16 +86,20 @@ LOG.addHandler(f_handler)
 class Tilt:
     def __init__(self):
         self.samples = 0
+        self.address = BDAddress()
         self.rssi = 0
         self.temperatureF = 0.0
         self.specific_gravity = 0.0
         self.lastActivityTime = None
 
     def __repr__(self):
-        return f'Tilt(Samples: {self.samples} Gravity: {self.specific_gravity:.4f} Temp: {self.temperatureF:.1f}F RSSI: {self.rssi} Now: {self.lastActivityTime})'
+        return f'Tilt(Address: {self.address} Samples: {self.samples} Gravity: {self.specific_gravity:.4f} Temp: {self.temperatureF:.1f}F RSSI: {self.rssi} Now: {self.lastActivityTime})'
         
     def __add__(self, x):
         newTilt = self
+        # NOTE: address gets copied over undisturbed
+        newTilt.address = x.address
+        
         newTilt.samples += 1
         newTilt.rssi += x.rssi
         newTilt.temperatureF += x.temperatureF
@@ -109,6 +114,7 @@ class Tilt:
     def average(self):
         """Average all values and return to self. Reset samples to 1.
            Leave lastActivityTime as the last set value.
+           Leave address undisturbed.
         """
         self.temperatureF /= self.samples
         self.specific_gravity /= self.samples
@@ -125,6 +131,79 @@ Tilts = {
     'Blue'  : Tilt(),
     'Yellow': Tilt(),
     'Pink'  : Tilt(),
+}
+        
+# Create classes to hold data during scans
+class RaptPill:
+    def __init__(self):
+        self.samples = 0
+        self.address = BDAddress()
+        self.rssi = 0
+        self.temperatureC = 0.0
+        self.specific_gravity = 0.0
+        self.gravity_velocity_valid = False
+        self.gravity_velocity_samples = 0
+        self.gravity_velocity = 0.0
+        self.accel_x = 0.0
+        self.accel_y = 0.0
+        self.accel_z = 0.0
+        self.battery = 0.0
+        self.lastActivityTime = None
+
+    def __repr__(self):
+        return f'RaptPill(Address: {self.address} Samples: {self.samples} Gravity: {self.specific_gravity:.4f} Temp: {self.temperatureC:.1f}C RSSI: {self.rssi} Battery: {self.battery:.1f}% X/Y/Z: {self.accel_x}/{self.accel_y}/{self.accel_z} Now: {self.lastActivityTime})'
+        
+    def __add__(self, x):
+        newRaptPill = self
+        # NOTE: address gets copied over undisturbed
+        newRaptPill.address = x.address
+        
+        newRaptPill.samples += 1
+        newRaptPill.rssi += x.rssi
+        newRaptPill.temperatureC += x.temperatureC
+        newRaptPill.specific_gravity += x.specific_gravity
+        newRaptPill.accel_x += x.accel_x
+        newRaptPill.accel_y += x.accel_y
+        newRaptPill.accel_z += x.accel_z
+        newRaptPill.battery += x.battery
+
+        if (x.gravity_velocity_valid):
+            newRaptPill.gravity_velocity_samples += 1
+            newRaptPill.gravity_velocity += x.gravity_velocity
+            newRaptPill.gravity_velocity_valid = True
+
+        if (x.lastActivityTime is None):
+            newRaptPill.lastActivityTime = datetime.now()
+        else:
+            newRaptPill.lastActivityTime = x.lastActivityTime
+
+        return newRaptPill
+            
+    def average(self):
+        """Average all values and return to self. Reset samples to 1.
+           Leave lastActivityTime as the last set value.
+           Leave address undisturbed.
+        """
+        self.temperatureC /= self.samples
+        self.specific_gravity /= self.samples
+        self.rssi //= self.samples
+        self.accel_x /= self.samples
+        self.accel_y /= self.samples
+        self.accel_z /= self.samples
+        self.battery /= self.samples
+        self.samples = 1
+        
+        if (self.gravity_velocity_valid):
+            # If gravity_velocity is valid, average over the number of valid samples we got. 
+            self.gravity_velocity /= self.gravity_velocity_samples
+            self.gravity_velocity_samples = 1
+
+raptpillsLock = threading.Lock()
+RaptPills = {
+    'Red'   : RaptPill(),
+    'Blue'  : RaptPill(),
+    'Green' : RaptPill(),
+    'Yellow': RaptPill(),
 }
         
 # Unique bluetooth UUIDs for Tilt sensors
@@ -153,6 +232,9 @@ tilt_calibration = {
 }
 
 rapt_calibration = {
+        'Red'    : literal_eval(os.getenv('RAPT_CAL_RED',    "None")),
+        'Blue'   : literal_eval(os.getenv('RAPT_CAL_BLUE',   "None")),
+        'Green'  : literal_eval(os.getenv('RAPT_CAL_GREEN',  "None")),
         'Yellow' : literal_eval(os.getenv('RAPT_CAL_YELLOW', "None")),
         #@@@#'unknown': literal_eval(os.getenv('RAPT_CAL_UNKNOWN', "None")),
 }
@@ -179,6 +261,11 @@ def degreeF2C(fahrenheit):
     """
     return (fahrenheit - 32) * 5/9
 
+def degreeC2F(celcius):
+    """ Convert Degrees Celcius to Fahrenheit
+    """
+    return (celcius * 9/5) + 32
+
 def process_TILT(address, rssi, color, major, minor, prox):
 
     myTilt = Tilt()
@@ -187,18 +274,19 @@ def process_TILT(address, rssi, color, major, minor, prox):
     myTilt.temperatureF = float(major)
     myTilt.specific_gravity = float(minor)/1000
     myTilt.rssi = rssi
+    myTilt.address = address
 
     try:
         with tiltsLock:
             Tilts[color] += myTilt
-            LOG.info("PROCESS: Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(
-                color, myTilt.specific_gravity, degreeF2C(myTilt.temperatureF), myTilt.temperatureF, myTilt.rssi, Tilts[color].lastActivityTime))
             LOG.info(f'PROCESS: Tilt: {color} {Tilts[color]}')    
         
     except KeyError:
         LOG.error("Unknown Tilt color: {}".format(color))
 
 def publish_TILT(color):
+    """Publish averaged data for each Tilt device
+    """
     
     try:
         with tiltsLock:
@@ -235,7 +323,8 @@ def publish_TILT(color):
         else:
             lat = myTilt.lastActivityTime
             
-        LOG.info("PUBLISH: Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(color, myTilt.specific_gravity, temperatureC, myTilt.temperatureF, myTilt.rssi, lat))        
+        LOG.info("PUBLISH: Tilt: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F RSSI: {} Now: {}".format(
+            color, myTilt.specific_gravity, temperatureC, myTilt.temperatureF, myTilt.rssi, lat))        
         mqttdata = {
             "specific_gravity_"+suffix: "{:.3f}".format(myTilt.specific_gravity),
             "plato_"+suffix: "{:.2f}".format(degree_plato),
@@ -300,7 +389,7 @@ def process_RAPTPILL(address, rssi, mfg_data):
     #@@@#color = "unknown"
     # @@@ Until get ID identifying code working, force to the only color I have
     color = "Yellow"
-    
+
     payload = mfg_data.hex()
     msg_type = payload[4:10]
 
@@ -313,67 +402,40 @@ def process_RAPTPILL(address, rssi, mfg_data):
         LOG.info('Device Type: ({}) {}'.format(device_type.hex(), device_type.decode("utf-8")))
     elif (msg_type == "505402"):
         try:
+
+            myRaptPill = RaptPill()
+            
             # V2 Format Data - get the uncalibrated values
             data = struct.unpack(">BBfHfhhhH", mfg_data[5:])
             # Pad (specified to always be 0x00)
             pad = data[0]
+            
             # If 0, gravity velocity is invalid, if 1, it is valid
-            gravity_velocity_valid = data[1]
+            myRaptPill.gravity_velocity_valid = bool(data[1])
             # floating point, points per day, if gravity_velocity_valid is 1
-            gravity_velocity = data[2]
+            myRaptPill.gravity_velocity = data[2]
             # temperature in Kelvin, multiplied by 128
-            temperatureC = (data[3] / 128) - 273.15
-            temperatureF = (temperatureC * 9/5) + 32
+            myRaptPill.temperatureC = (data[3] / 128) - 273.15
             # specific gravity, floating point, apparently in points
-            specific_gravity = data[4] / 1000
+            myRaptPill.specific_gravity = data[4] / 1000
             # raw accelerometer data * 16, signed
-            accel_x = data[5] / 16
-            accel_y = data[6] / 16
-            accel_z = data[7] / 16
+            myRaptPill.accel_x = data[5] / 16
+            myRaptPill.accel_y = data[6] / 16
+            myRaptPill.accel_z = data[7] / 16
             # battery percentage * 256, unsigned
-            battery = data[8] / 256
+            myRaptPill.battery = data[8] / 256
 
-            # See if have calibration values. If so, use them.
-            if (rapt_calibration[color]):
-                suffix = "cali"
-                temperatureF += rapt_calibration[color]['temp']
-                specific_gravity += rapt_calibration[color]['sg']
-            else:
-                suffix = "uncali"
-
+            myRaptPill.address = address
+            myRaptPill.rssi = rssi
+            
             if (pad != 0):
                 LOG.error("INVALID FORMAT for RAPT Pill Data:", mfg_data)
             else:
-                if gravity_velocity_valid == 1:
-                    now = datetime.now()
-                    LOG.info("Pill: {}  Gravity: {:.4f} (Pts/Day: {:.1f}) Temp: {:.1f}C/{:.1f}F Battery: {:.1f}% RSSI: {} Now: {}".format(address.address, specific_gravity, gravity_velocity, temperatureC, temperatureF, battery, rssi, now))
-                    mqttdata = {
-                        "specific_gravity_"+suffix: "{:.4f}".format(specific_gravity),
-                        "specific_gravity_pts_per_day_"+suffix: "{:.1f}".format(gravity_velocity),
-                        "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
-                        "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
-                        "battery": "{:.1f}".format(battery),
-                        "rssi": "{:d}".format(rssi),
-                        #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
-                        "lastActivityTime": "{}".format(now),
-                    }
+                with raptpillsLock:
+                    # With mutex locked, update RaptPills
+                    RaptPills[color] += myRaptPill
+                    LOG.info(f'PROCESS: RaptPill: {color} {RaptPills[color]}')    
 
-                else:
-                    now = datetime.now()
-                    LOG.info("Pill: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F Battery: {:.1f}% RSSI: {} Now: {}".format(address.address, specific_gravity, temperatureC, temperatureF, battery, rssi, now))
-                    mqttdata = {
-                        "specific_gravity_"+suffix: "{:.4f}".format(specific_gravity),
-                        "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
-                        "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
-                        "battery": "{:.1f}".format(battery),
-                        "rssi": "{:d}".format(rssi),
-                        #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
-                        "lastActivityTime": "{}".format(now),
-                    }
-
-                # Send message via MQTT server
-                publish.single("rapt/pill/{}".format(color), payload=json.dumps(mqttdata), qos=0, retain=True,
-                               hostname=config['host'], port=config['port'], auth=config['auth'])
         except struct.error as e:
             LOG.error("Could not unpack RAPT Pill Hydrometer message: {}".format(e))
         except KeyError:
@@ -383,15 +445,83 @@ def process_RAPTPILL(address, rssi, mfg_data):
         # Unknown Message Format
         LOG.warning('Unknown RAPT Pill Message Type (', msg_type, ') data: ', payload)
         
+def publish_RAPTPILL(color):
+    """Publish averaged data for each Rapt Pill device
+    """
+
+    try:
+        with raptpillsLock:
+            # Check if have anything to publish
+            if (RaptPills[color].samples < 1):        
+                LOG.info("Nothing to publish for RaptPill color: {}".format(color))
+                return
+        
+            # next, average all of the collected values and copy results to myRaptPill
+            RaptPills[color].average()
+            myRaptPill = RaptPills[color]
+        
+            # re-init data so the next set can be averaged
+            # NOTE: if data is not published, it will be lost
+            RaptPills[color] = RaptPill()
+        
+        # See if have calibration values. If so, use them.
+        if (rapt_calibration[color]):
+            suffix = "cali"
+            myRaptPill.temperatureC += rapt_calibration[color]['temp']
+            myRaptPill.specific_gravity += rapt_calibration[color]['sg']
+        else:
+            suffix = "uncali"
+
+        # convert temperature
+        temperatureF = degreeC2F(myRaptPill.temperatureC)
+
+        # Check that a lastActivityTime exists - if not set to now()
+        if (myRaptPill.lastActivityTime is None):
+            lat = datetime.now()
+        else:
+            lat = myRaptPill.lastActivityTime
+        
+        if (myRaptPill.gravity_velocity_valid):
+            LOG.info("PUBLISH: Pill: {}  Gravity: {:.4f} (Pts/Day: {:.1f}) Temp: {:.1f}C/{:.1f}F Battery: {:.1f}% RSSI: {} Now: {}".format(
+                color, myRaptPill.specific_gravity, myRaptPill.gravity_velocity, myRaptPill.temperatureC, temperatureF, myRaptPill.battery, myRaptPill.rssi, lat))
+            mqttdata = {
+                "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
+                "specific_gravity_pts_per_day_"+suffix: "{:.1f}".format(myRaptPill.gravity_velocity),
+                "temperatureC_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
+                "battery": "{:.1f}".format(myRaptPill.battery),
+                "rssi": "{:d}".format(myRaptPill.rssi),
+                #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
+                "lastActivityTime": "{}".format(lat),
+            }
+
+        else:
+            LOG.info("PUBLISH: Pill: {}  Gravity: {:.4f} Temp: {:.1f}C/{:.1f}F Battery: {:.1f}% RSSI: {} Now: {}".format(
+                color, myRaptPill.specific_gravity, myRaptPill.temperatureC, temperatureF, myRaptPill.battery, myRaptPill.rssi, lat))
+            mqttdata = {
+                "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
+                "temperatureC_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperatureF_"+suffix: "{:.1f}".format(temperatureF),
+                "battery": "{:.1f}".format(myRaptPill.battery),
+                "rssi": "{:d}".format(myRaptPill.rssi),
+                #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
+                "lastActivityTime": "{}".format(lat),
+            }
+
+        # Send message via MQTT server
+        publish.single("rapt/pill/{}".format(color), payload=json.dumps(mqttdata), qos=0, retain=True,
+                       hostname=config['host'], port=config['port'], auth=config['auth'])
+
+    except KeyError:
+        LOG.error("Unknown RaptPill color: {}".format(color))
+        
             
 def on_advertisement(advertisement):
     """Message recieved from BLE Beacon
     """
 
     if advertisement.mfg_data is not None:
-        rssi = advertisement.rssi
-        uuid128 = advertisement.uuid128s
-        address = advertisement.address
+        #@@@#uuid128 = advertisement.uuid128s
         payload = advertisement.mfg_data.hex()
         mfg_id = payload[0:4]
         if mfg_id == "4b45" and payload[4:6] == "47":
@@ -435,6 +565,10 @@ def publishAll():
     # Publish all possible Tilts
     for color in Tilts:
         publish_TILT(color)
+
+    # Publish all possible RaptPills
+    for color in RaptPills:
+        publish_RAPTPILL(color)
 
 
 def schedule_run_continuously(interval=1):
@@ -487,11 +621,13 @@ if __name__ == '__main__':
     # advertisement, simply loop here forever using sleep() to keep from
     # running a VERY tight while loop that will chew up CPU cycles
 
-    while(1):
-        # Wait until next interval period
-        sleep(sleep_interval)
-
+    while True:
+        try:
+            # Wait until next interval period
+            sleep(sleep_interval)
+        except KeyboardInterrupt:
+            break
+        
     # Stop the background thread
-    # NOTE: Should not ever run
     stop_run_continuously.set()
     
