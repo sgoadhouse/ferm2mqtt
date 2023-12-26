@@ -47,6 +47,7 @@ import os
 import json
 import paho.mqtt.publish as publish
 import requests
+import traceback
 from ast import literal_eval
 
 import threading
@@ -68,9 +69,9 @@ LOG = lg.getLogger()
 c_handler = lg.StreamHandler()
 f_handler = lg.FileHandler('/tmp/ferm2mqtt.log')
 #@@@#c_handler.setLevel(lg.INFO)
-#@@@#f_handler.setLevel(lg.INFO)
+f_handler.setLevel(lg.INFO)
 c_handler.setLevel(lg.WARNING)
-f_handler.setLevel(lg.WARNING)
+#@@@#f_handler.setLevel(lg.WARNING)
 
 # Create formatters and add it to handlers
 c_format = lg.Formatter('%(name)s - %(levelname)s - %(message)s')
@@ -341,7 +342,10 @@ def publish_TILT(color):
         
     except KeyError:
         LOG.error("Unknown Tilt color: {}".format(color))
-        
+
+    except:
+        LOG.error("Unknown exception during publish_TILT(). Traceback follows")
+        LOG.error(traceback.format_exc())
 
 def process_iBeacon(address, rssi, mfg_data):
     """Process the iBeacon Message
@@ -514,6 +518,10 @@ def publish_RAPTPILL(color):
 
     except KeyError:
         LOG.error("Unknown RaptPill color: {}".format(color))
+
+    except:
+        LOG.error("Unknown exception during publish_RAPTPILL(). Traceback follows")
+        LOG.error(traceback.format_exc())
         
             
 def on_advertisement(advertisement):
