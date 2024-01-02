@@ -329,8 +329,8 @@ def publish_TILT(color):
         mqttdata = {
             "specific_gravity_"+suffix: "{:.3f}".format(myTilt.specific_gravity),
             "plato_"+suffix: "{:.2f}".format(degree_plato),
-            "temperatureC_"+suffix: "{:.2f}".format(temperatureC),
-            "temperatureF_"+suffix: "{:.1f}".format(myTilt.temperatureF),
+            "temperature_celcius_"+suffix: "{:.2f}".format(temperatureC),
+            "temperature_fahrenheit_"+suffix: "{:.1f}".format(myTilt.temperatureF),
             "rssi": "{:d}".format(myTilt.rssi),
             #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
             "lastActivityTime": "{}".format(lat),
