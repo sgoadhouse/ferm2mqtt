@@ -42,6 +42,8 @@ from bleson.logger import DEBUG, ERROR, WARNING, INFO, set_level
 from datetime import datetime
 
 import struct
+import errno
+import socket
 import logging as lg
 import os
 import json
@@ -343,6 +345,18 @@ def publish_TILT(color):
     except KeyError:
         LOG.error("Unknown Tilt color: {}".format(color))
 
+    except socket.timeout:
+        LOG.warning("Socket Timeout during publish_TILT(). Will try again later.")
+    
+    except OSError as e:
+        if e.errno == errno.EHOSTUNREACH:
+            ## Will sometimes get a "No route to host" which is okay since will try to publish again later.
+            LOG.warning("Cannot reach MQTT broker, {}:{}, during publish_TILT(). Will try again later.".format(config['host'],port=config['port']))
+        else:
+            ## Unexpected OSError so traceback
+            LOG.error("Unexpect OSError during publish_TILT(). Traceback follows")
+            LOG.error(traceback.format_exc())            
+        
     except:
         LOG.error("Unknown exception during publish_TILT(). Traceback follows")
         LOG.error(traceback.format_exc())
@@ -519,6 +533,18 @@ def publish_RAPTPILL(color):
     except KeyError:
         LOG.error("Unknown RaptPill color: {}".format(color))
 
+    except socket.timeout:
+        LOG.warning("Socket Timeout during publish_RAPTPILL(). Will try again later.")
+    
+    except OSError as e:
+        if e.errno == errno.EHOSTUNREACH:
+            ## Will sometimes get a "No route to host" which is okay since will try to publish again later.
+            LOG.warning("Cannot reach MQTT broker, {}:{}, during publish_RAPTPILL(). Will try again later.".format(config['host'],port=config['port']))
+        else:
+            ## Unexpected OSError so traceback
+            LOG.error("Unexpect OSError during during publish_RAPTPILL(). Traceback follows")
+            LOG.error(traceback.format_exc())            
+        
     except:
         LOG.error("Unknown exception during publish_RAPTPILL(). Traceback follows")
         LOG.error(traceback.format_exc())
