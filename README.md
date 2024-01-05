@@ -119,6 +119,8 @@ Environment="MQTT_AUTH={'username':\"my_username\", 'password':\"my_password\"}"
 Environment="TILT_CAL_YELLOW={'sg':0.024, 'temp':0.0}"
 ExecStart=/usr/bin/python3 <PATH TO YOUR FILE>/ferm2mqtt.py
 StandardInput=tty-force
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target

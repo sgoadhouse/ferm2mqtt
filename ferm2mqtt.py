@@ -60,7 +60,8 @@ import schedule
 # Constants
 #
 #@@@#scan_interval = 60.0  # How long to scan in seconds
-sleep_interval = 60.0*4  # Num. seconds to wait after scanning for new messages before scan again
+#@@@#sleep_interval = 60.0*4  # Num. seconds to wait after scanning for new messages before scan again
+sleep_interval = 30 # Num. seconds to wait after scanning for new messages before scan again
 
 lg.basicConfig()
 LOG = lg.getLogger()
@@ -637,8 +638,10 @@ if __name__ == '__main__':
     # Publish and reset data once every minute
     schedule.every().minute.do(publishAll)
 
+    #@@@ Make it simpler by adding the run_pending() to the main loop below and not bother with a Thread
+    #
     # Start the background thread for schedule
-    stop_run_continuously = schedule_run_continuously()
+    #@@@#stop_run_continuously = schedule_run_continuously()
     
     # Scan for iBeacons of RAPT Pill and collect data
     scan()
@@ -657,11 +660,13 @@ if __name__ == '__main__':
 
     while True:
         try:
+            # Run scheduled jobs
+            schedule.run_pending()
             # Wait until next interval period
             sleep(sleep_interval)
         except KeyboardInterrupt:
             break
         
     # Stop the background thread
-    stop_run_continuously.set()
+    #@@@#stop_run_continuously.set()
     
