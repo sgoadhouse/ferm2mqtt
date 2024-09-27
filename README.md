@@ -116,7 +116,7 @@ Conflicts=getty@tty1.service
 Type=simple
 Environment="MQTT_IP=192.168.1.2"
 Environment="MQTT_AUTH={'username':\"my_username\", 'password':\"my_password\"}"
-Environment="TILT_CAL_YELLOW={'sg':0.024, 'temp':0.0}"
+Environment="TILT_CAL_YELLOW={'temp':0.0, 'sg_raw_lo':0.9760, 'sg_ref_lo':1.0000, 'sg_raw_hi':1.0290, 'sg_ref_hi':1.0660}"
 ExecStart=/usr/bin/python3 <PATH TO YOUR FILE>/ferm2mqtt.py
 StandardInput=tty-force
 Restart=on-failure
@@ -126,7 +126,17 @@ RestartSec=5s
 WantedBy=multi-user.target
 ```
 
-Remember to update MQTT_IP, my_username, my_password, calibration constants and change the PATH variable in the script above. Then update your service,
+Remember to update MQTT_IP, my_username, my_password, calibration constants and change the PATH variable in the script above.
+
+For the TILT calibration values:
+* 'temp' is a simple additive value to use to correct the raw value (calTemp = rawTemp + 'temp')
+* 'sg_raw_lo' is the uncalibrated value reported by Tilt when floating in pure water
+* 'sg_ref_lo' is to be 1.000, the gravity value of pure water
+* 'sg_raw_hi' is the uncalibrated value reported by Tilt when floating in wort of a known gravity
+* 'sg_ref_hi' is the actual gravity of the wort as measured by a calibrated instrument
+
+
+Then update your service,
 
 ```
 sudo systemctl reload-daemon

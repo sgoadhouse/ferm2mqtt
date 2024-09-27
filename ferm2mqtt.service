@@ -7,7 +7,7 @@ Conflicts=getty@tty1.service
 Type=simple
 Environment="MQTT_IP=192.168.153.40"
 Environment="MQTT_AUTH={'username':\"mqttgoad\", 'password':\"vk8MqKnKdAK2gG\"}"
-Environment="TILT_CAL_BLUE={'sg':0.024, 'temp':0.0}"
+Environment="TILT_CAL_BLUE={'temp':0.0, 'sg_raw_lo':0.9760, 'sg_ref_lo':1.0000, 'sg_raw_hi':1.0290, 'sg_ref_hi':1.0660}"
 ExecStart=/usr/bin/python3 /home/pi/ferm2mqtt/ferm2mqtt.py
 StandardInput=tty-force
 #@@@#RemainAfterExit=no

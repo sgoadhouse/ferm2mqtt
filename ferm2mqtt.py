@@ -223,6 +223,14 @@ TILT_UUIDS = {
         #@@@#'020001c0-1cf3-4090-d644-781eff3a2cfe': 'RAPT Yellow',
 }
 
+# Put calibration values in a shell environment variable in the format of:
+# export TILT_CAL_BLUE="{'temp':0.0, 'sg_raw_lo':0.9760, 'sg_ref_lo':1.0000, 'sg_raw_hi':1.0290, 'sg_ref_hi':1.0660}"
+#
+# 'temp' is a simple additive value to use to correct the raw value (calTemp = rawTemp + 'temp')
+# 'sg_raw_lo' is the uncalibrated value reported by Tilt when floating in pure water
+# 'sg_ref_lo' is to be 1.000, the gravity value of pure water
+# 'sg_raw_hi' is the uncalibrated value reported by Tilt when floating in wort of a known gravity
+# 'sg_ref_hi' is the actual gravity of the wort as measured by a calibrated instrument
 tilt_calibration = {
         'Red'    : literal_eval(os.getenv('TILT_CAL_RED', "None")),
         'Green'  : literal_eval(os.getenv('TILT_CAL_GREEN', "None")),
@@ -288,6 +296,34 @@ def process_TILT(address, rssi, color, major, minor, prox):
     except KeyError:
         LOG.error("Unknown Tilt color: {}".format(color))
 
+def tiltCalibratedTemperature(measured, calibration_factors):
+    """Convert the measured TILT temperature into a calibrated value
+    """
+
+    return measured + calibration_factors['temp']
+
+def tiltCalibratedSpecificGravity(measured, calibration_factors):
+    """Convert the measured TILT specific gravity into a calibrated value
+
+    Use Two-Point calibration per:
+    https://learn.adafruit.com/calibrating-sensors/two-point-calibration#
+    """
+
+    # Old method
+    #@@@#return measured + calibration_factors['sg']
+    
+    RawLow         = calibration_factors['sg_raw_lo']
+    RawRange       = calibration_factors['sg_raw_hi'] - RawLow
+    ReferenceLow   = calibration_factors['sg_ref_lo']
+    ReferenceRange = calibration_factors['sg_ref_hi'] - ReferenceLow
+
+    calibratedValue = (((measured - RawLow) * ReferenceRange) / RawRange) + ReferenceLow
+
+    LOG.info("TILT CAL: SG uncal: {}  SG raw low: {} SG ref low: {} SG raw high: {} SG ref high: {} SG cal: {}".format(
+        measured, RawLow, ReferenceLow, calibration_factors['sg_raw_hi'], calibration_factors['sg_ref_hi'], calibratedValue))        
+    
+    return calibratedValue
+        
 def publish_TILT(color):
     """Publish averaged data for each Tilt device
     """
@@ -310,8 +346,8 @@ def publish_TILT(color):
         # See if have calibration values. If so, use them.
         if (tilt_calibration[color]):
             suffix = "cali"
-            myTilt.temperatureF += tilt_calibration[color]['temp']
-            myTilt.specific_gravity += tilt_calibration[color]['sg']
+            myTilt.temperatureF = tiltCalibratedTemperature(myTilt.temperatureF, tilt_calibration[color])
+            myTilt.specific_gravity = tiltCalibratedSpecificGravity(myTilt.specific_gravity, tilt_calibration[color])
         else:
             suffix = "uncali"
         
