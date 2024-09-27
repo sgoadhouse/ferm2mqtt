@@ -1,0 +1,19 @@
+[Unit]
+Description=BLE Hydrometer Service
+After=multi-user.target
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+Environment="MQTT_IP=192.168.153.40"
+Environment="MQTT_AUTH={'username':\"mqttgoad\", 'password':\"vk8MqKnKdAK2gG\"}"
+Environment="TILT_CAL_BLUE={'sg':0.024, 'temp':0.0}"
+ExecStart=/usr/bin/python3 /home/pi/ferm2mqtt/ferm2mqtt.py
+StandardInput=tty-force
+#@@@#RemainAfterExit=no
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+
