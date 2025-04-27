@@ -288,14 +288,14 @@ def sg2plato(sg):
     return 135.997*pow(sg, 3) - 630.272*pow(sg, 2) + 1111.14*sg - 616.868
 
 def degreeF2C(fahrenheit):
-    """ Convert Degrees Fahrenheit to Celcius
+    """ Convert Degrees Fahrenheit to Celsius
     """
     return (fahrenheit - 32) * 5/9
 
-def degreeC2F(celcius):
-    """ Convert Degrees Celcius to Fahrenheit
+def degreeC2F(celsius):
+    """ Convert Degrees Celsius to Fahrenheit
     """
-    return (celcius * 9/5) + 32
+    return (celsius * 9/5) + 32
 
 def process_TILT(address, rssi, color, major, minor, prox):
 
@@ -387,7 +387,7 @@ def publish_TILT(color):
         mqttdata = {
             "specific_gravity_"+suffix: "{:.3f}".format(myTilt.specific_gravity),
             "plato_"+suffix: "{:.2f}".format(degree_plato),
-            "temperature_celcius_"+suffix: "{:.2f}".format(temperatureC),
+            "temperature_celsius_"+suffix: "{:.2f}".format(temperatureC),
             "temperature_fahrenheit_"+suffix: "{:.1f}".format(myTilt.temperatureF),
             "rssi": "{:d}".format(myTilt.rssi),
             #@@@#"lastActivityTime": datetime.now().strftime("%b %d %Y %H:%M:%S"),
@@ -567,7 +567,7 @@ def publish_RAPTPILL(color):
             mqttdata = {
                 "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
                 "specific_gravity_pts_per_day_"+suffix: "{:.1f}".format(myRaptPill.gravity_velocity),
-                "temperature_celcius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperature_celsius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
                 "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
                 "battery": "{:.1f}".format(myRaptPill.battery),
                 "rssi": "{:d}".format(myRaptPill.rssi),
@@ -580,7 +580,7 @@ def publish_RAPTPILL(color):
                 color, myRaptPill.specific_gravity, myRaptPill.temperatureC, temperatureF, myRaptPill.battery, myRaptPill.rssi, lat))
             mqttdata = {
                 "specific_gravity_"+suffix: "{:.4f}".format(myRaptPill.specific_gravity),
-                "temperature_celcius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
+                "temperature_celsius_"+suffix: "{:.2f}".format(myRaptPill.temperatureC),
                 "temperature_fahrenheit_"+suffix: "{:.1f}".format(temperatureF),
                 "battery": "{:.1f}".format(myRaptPill.battery),
                 "rssi": "{:d}".format(myRaptPill.rssi),
