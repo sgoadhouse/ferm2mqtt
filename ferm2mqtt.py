@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Wrapper for reading messages from [RAPT Pill wireless hydrometer](https://www.kegland.com.au/products/yellow-rapt-pill-hydrometer-thermometer-wifi-bluetooth/) or [Tilt wireless Hydrometer](https://tilthydrometer.com) and forwarding them to MQTT topics. 
+"""Wrapper for reading messages from [RAPT Pill wireless
+hydrometer](https://www.kegland.com.au/products/yellow-rapt-pill-hydrometer-thermometer-wifi-bluetooth/)
+or [Tilt wireless Hydrometer](https://tilthydrometer.com) and
+forwarding them to MQTT topics.
 
-The device acts as a simple Bluetooth Low Energy (BLE) beacon sending its data encoded within the Manufacturing Data. Details of RAPT Pill data format can be found here:
+The device acts as a simple Bluetooth Low Energy (BLE) beacon sending
+its data encoded within the Manufacturing Data. Details of RAPT Pill
+data format can be found here:
 https://gitlab.com/rapt.io/public/-/wikis/Pill-Hydrometer-Bluetooth-Transmissions
 
-The raw values read from the RAPT Pill or Tilt are (possibly) uncalibrated and should be calibrated before use. The script works a follows,
+The raw values read from the RAPT Pill or Tilt are (possibly)
+uncalibrated and should be calibrated before use. The script works a
+follows,
 
  1. Listen for local BLE devices
  2. If found the callback is triggered
-  * Use Manufacturer ID "5241" (0x4152) to determine that it is from a RAPT Pill (cannot yet distinguish multiple Pills)
+  * Use Manufacturer ID "5241" (0x4152) to determine that it is from a RAPT Pill (use Bluetooth MAC to determine which color)
   * Use Manufacturer ID "4c00" (0x004c) to determine that it is from an iBeacon and check UUID for Tilt color
   * Extract and convert measurements from the device
   * Store in a global under the device's color string for processing later
@@ -204,7 +211,7 @@ class RaptPill:
 
 raptpillsLock = threading.Lock()
 RaptPills = {
-    'Red'   : RaptPill(),
+    'Redd'  : RaptPill(),       # at app.rapt.io, have a 4 character minimum on RAPT names, so using 'Redd'
     'Blue'  : RaptPill(),
     'Green' : RaptPill(),
     'Yellow': RaptPill(),
@@ -221,6 +228,18 @@ TILT_UUIDS = {
         'a495bb70c5b14b44b5121370f02d74de': 'Yellow',
         'a495bb80c5b14b44b5121370f02d74de': 'Pink', 
         #@@@#'020001c0-1cf3-4090-d644-781eff3a2cfe': 'RAPT Yellow',
+}
+
+# Unique bluetooth MAC addresses for RAPT sensors
+#
+# NOTE: The registered MAC address and the one that shows on the RAPT
+# Captive Portal (i.e. connect to RAPT's web server) is the bluetooth
+# MAC address minus 2 in the lowest byte. For simplification, use the
+# bluetooth MAC here but know that it is +2 the value shown in the
+# Captive Portal
+RAPT_BD_MAC = {
+        BDAddress('AC:15:18:DF:9C:82'): 'Redd',
+        BDAddress('78:E3:6D:3C:EC:8A'): 'Yellow',
 }
 
 # Put calibration values in a shell environment variable in the format of:
@@ -244,7 +263,7 @@ tilt_calibration = {
 }
 
 rapt_calibration = {
-        'Red'    : literal_eval(os.getenv('RAPT_CAL_RED',    "None")),
+        'Redd'   : literal_eval(os.getenv('RAPT_CAL_REDD',   "None")),
         'Blue'   : literal_eval(os.getenv('RAPT_CAL_BLUE',   "None")),
         'Green'  : literal_eval(os.getenv('RAPT_CAL_GREEN',  "None")),
         'Yellow' : literal_eval(os.getenv('RAPT_CAL_YELLOW', "None")),
@@ -441,9 +460,15 @@ def process_RAPTPILL(address, rssi, mfg_data):
     """Process the RAPT Pill Message
     """
 
+    try:
+        color = RAPT_BD_MAC[address]
+    except KeyError:
+        LOG.info("Unable to decode RAPT color from address {}. Probably some other iBeacon. Message was {}".format(address,mfg_data.hex))
+        return
+    
     #@@@#color = "unknown"
     # @@@ Until get ID identifying code working, force to the only color I have
-    color = "Yellow"
+    #@@@#color = "Yellow"
 
     payload = mfg_data.hex()
     msg_type = payload[4:10]
